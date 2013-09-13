@@ -1,6 +1,8 @@
 #ifndef MEMORY_HPP
 #define MEMORY_HPP
 
+#include <string>
+
 #include <windows.h>
 
 class memory
@@ -27,22 +29,18 @@ class memory
 
         void enable_debug_privileges();
 
+        bool is_foreground_window_current_process_id();
+
         void set_process_by_hwnd(HWND hwnd);
         void set_process_by_id(DWORD process_id);
 
         DWORD set_protection(DWORD address, DWORD type, int size);
 
         template <class T>
+        void write_any(DWORD address, T value);
+
+        template <class T>
         T read_any(DWORD address);
-
-        void write_bytes(DWORD address, int value, int size);
-        int read_bytes(DWORD address, int size);
-
-        void write_float(DWORD address, float value);
-        float read_float(DWORD address);
-
-        void write_double(DWORD address, double value);
-        double read_double(DWORD address);
 
         void write_char(DWORD address, unsigned char* value, int size);
 
@@ -54,7 +52,7 @@ class memory
 
 memory::memory()
 {
-    //
+    enable_debug_privileges();
 }
 
 memory::~memory()
@@ -79,14 +77,16 @@ void memory::set_process_handle(HANDLE process_handle) { m_process_handle = proc
 
 void memory::enable_debug_privileges()
 {
-    HANDLE hToken;
+    HANDLE token;
 
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
     {
         TOKEN_PRIVILEGES tp;
+        TOKEN_PRIVILEGES tp_previous;
+
+        DWORD cb_previous = sizeof(TOKEN_PRIVILEGES);
+
         LUID luid;
-        TOKEN_PRIVILEGES tpPrevious;
-        DWORD cbPrevious = sizeof(TOKEN_PRIVILEGES);
 
         if (LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &luid))
         {
@@ -96,31 +96,46 @@ void memory::enable_debug_privileges()
 
             AdjustTokenPrivileges
             (
-                hToken,
+                token,
                 FALSE,
                 &tp,
                 sizeof(TOKEN_PRIVILEGES),
-                &tpPrevious,
-                &cbPrevious
+                &tp_previous,
+                &cb_previous
             );
 
-            tpPrevious.PrivilegeCount            = 1;
-            tpPrevious.Privileges[0].Luid        = luid;
-            tpPrevious.Privileges[0].Attributes |= (SE_PRIVILEGE_ENABLED);
+            tp_previous.PrivilegeCount            = 1;
+            tp_previous.Privileges[0].Luid        = luid;
+            tp_previous.Privileges[0].Attributes |= (SE_PRIVILEGE_ENABLED);
     
             AdjustTokenPrivileges
             (
-                hToken,
+                token,
                 FALSE,
-                &tpPrevious,
-                cbPrevious,
+                &tp_previous,
+                cb_previous,
                 NULL,
                 NULL
             );
         }
     }
 
-    CloseHandle(hToken);
+    CloseHandle(token);
+}
+
+bool memory::is_foreground_window_current_process_id()
+{
+    HWND foreground_hwnd = GetForegroundWindow();
+
+    DWORD foreground_process_id;
+    GetWindowThreadProcessId(foreground_hwnd, &foreground_process_id);
+
+    if (foreground_process_id != GetCurrentProcessId())
+    {
+        return false;
+    }
+
+    return true;
 }
 
 void memory::set_process_by_hwnd(HWND hwnd)
@@ -141,53 +156,23 @@ void memory::set_process_by_id(DWORD process_id)
 
 DWORD memory::set_protection(DWORD address, DWORD type, int size)
 {
-        DWORD old_protection;
-        VirtualProtectEx(m_process_handle, reinterpret_cast<void*>(address), size, type, &old_protection);
-        return old_protection;
+    DWORD old_protection;
+    VirtualProtectEx(m_process_handle, reinterpret_cast<void*>(address), size, type, &old_protection);
+    return old_protection;
+}
+
+template <class T>
+void memory::write_any(DWORD address, T value)
+{
+    WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &value, sizeof(value), 0);
 }
 
 template <class T>
 T memory::read_any(DWORD address)
 {
-        T buffer;
-        ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, sizeof(buffer), 0);
-        return buffer;
-}
-
-void memory::write_bytes(DWORD address, int value, int size)
-{
-    WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &value, size, 0);
-}
-
-int memory::read_bytes(DWORD address, int size)
-{
-        int buffer;
-        ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, size, 0);
-        return buffer;
-}
-
-void memory::write_float(DWORD address, float value)
-{
-    WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &value, sizeof(value), 0);
-}
-
-float memory::read_float(DWORD address)
-{
-        float buffer;
-        ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, sizeof(buffer), 0);
-        return buffer;
-}
-
-void memory::write_double(DWORD address, double value)
-{
-    WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &value, sizeof(value), 0);
-}
-
-double memory::read_double(DWORD address)
-{
-        double buffer;
-        ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, sizeof(buffer), 0);
-        return buffer;
+    T buffer;
+    ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, sizeof(buffer), 0);
+    return buffer;
 }
 
 void memory::write_char(DWORD address, unsigned char* value, int size)
@@ -197,39 +182,42 @@ void memory::write_char(DWORD address, unsigned char* value, int size)
 
 void memory::write_string(DWORD address, std::string value)
 {
-        int j = 0;
-        for(unsigned int i = 0; i < value.size(); i++)
-        {
-            WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address + j), &value[i], 1, 0);
-            j++;
-        }
+    int j = 0;
+    for(unsigned int i = 0; i < value.size(); i++)
+    {
+        WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address + j), &value[i], 1, 0);
+        j++;
+    }
 
-        unsigned char null_terminator = 0x00;
-        WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address + j), &null_terminator, sizeof(null_terminator), 0);
+    unsigned char null_terminator = 0x00;
+    WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address + j), &null_terminator, sizeof(null_terminator), 0);
 }
 
 std::string memory::read_string(DWORD address, int size)
 {
-        //char * buffer;
-        //buffer = (char*)malloc((sizeof(char) * size) + 1);
+    //char * buffer;
+    //buffer = (char*)malloc((sizeof(char) * size) + 1);
 
-        char buffer[size];
-        ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, sizeof(buffer), 0);
-        return buffer;
+    char buffer[size];
+    ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, sizeof(buffer), 0);
+    return buffer;
 }
 
 void memory::write_nops(DWORD address, int size)
 {
-        char nops[size];
+    //char * nops;
+    //nops = (char*)malloc((sizeof(char) * size) + 1);
 
-        unsigned char nop = 0x90;
+    char nops[size];
 
-        for (int i = 0; i < size; i++)
-        {
-            memcpy(&nops, &nop, sizeof(nop));
-        }
+    unsigned char nop = 0x90;
 
-        WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &nops, sizeof(nops), 0);
+    for (int i = 0; i < size; i++)
+    {
+        memcpy(&nops, &nop, sizeof(nop));
+    }
+
+    WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &nops, sizeof(nops), 0);
 }
 
 #endif // MEMORY_HPP
