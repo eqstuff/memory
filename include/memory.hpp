@@ -15,7 +15,6 @@ class memory
     public:
         memory();
         ~memory();
-        memory(DWORD process_id);
 
         void close();
 
@@ -195,20 +194,20 @@ void memory::write_string(DWORD address, std::string value)
 
 std::string memory::read_string(DWORD address, int size)
 {
-    //char * buffer;
-    //buffer = (char*)malloc((sizeof(char) * size) + 1);
+    char *buffer = new char[size + 1];
 
-    char buffer[size];
-    ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &buffer, sizeof(buffer), 0);
-    return buffer;
+    ReadProcessMemory(m_process_handle, reinterpret_cast<void*>(address), buffer, size, 0);
+
+    std::string result = buffer;
+
+    delete[] buffer;
+
+    return result;
 }
 
 void memory::write_nops(DWORD address, int size)
 {
-    //char * nops;
-    //nops = (char*)malloc((sizeof(char) * size) + 1);
-
-    char nops[size];
+    char *nops = new char[size];
 
     unsigned char nop = 0x90;
 
@@ -218,6 +217,8 @@ void memory::write_nops(DWORD address, int size)
     }
 
     WriteProcessMemory(m_process_handle, reinterpret_cast<void*>(address), &nops, sizeof(nops), 0);
+
+    delete[] nops;
 }
 
 #endif // MEMORY_HPP
